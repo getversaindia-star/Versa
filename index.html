@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Versa | Premium Digital Services</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6', // Bright Blue
+                        secondary: '#8b5cf6', // Violet
+                        surface: '#ffffff',
+                        background: '#f0f4f8',
+                    },
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                    },
+                    boxShadow: {
+                        '3d': '0 10px 25px -5px rgba(59, 130, 246, 0.15), 0 8px 10px -6px rgba(59, 130, 246, 0.1)',
+                        'card': '0 20px 40px -10px rgba(0,0,0,0.05)',
+                        'inner-light': 'inset 0 2px 4px 0 rgba(255, 255, 255, 0.5)'
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, addDoc, query, where, onSnapshot, serverTimestamp, increment } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyChvXPTDBq15r0_5oCNE7yL5mwT8YNdOMc",
+            authDomain: "versa-29f14.firebaseapp.com",
+            projectId: "versa-29f14",
+            storageBucket: "versa-29f14.firebasestorage.app",
+            messagingSenderId: "665463922036",
+            appId: "1:665463922036:web:d4c00a63ebc0c65689a021",
+            measurementId: "G-DC1KSTS624"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let currentUser = null;
+        let userData = null;
+        let servicesConfig = {
+            software: ["CapCut", "After Effects", "Premiere Pro", "Canva", "Photoshop", "Figma"],
+            editingTypes: ["Motion Graphic", "Cinematic", "Short Form", "Vlog"],
+            designTypes: ["Logo", "Poster", "Thumbnail", "UI/UX"],
+            devTypes: ["Web Development", "App Development", "Scripting"]
+        };
+
+        // --- Auth Logic ---
+        window.googleLogin = async () => {
+            const provider = new GoogleAuthProvider();
+            try {
+                await signInWithPopup(auth, provider);
+                toggleModal('login', false);
+                showToast("Welcome to Versa!", "success");
+            } catch (error) {
+                console.error(error);
+                if(error.code === 'auth/unauthorized-domain') {
+                    showToast("Preview Mode: Login Restricted (Deploy to use)", "error");
+                } else {
+                    showToast(error.message, "error");
+                }
+            }
+        };
+
+        window.logout = async () => {
+            await signOut(auth);
+            window.location.reload();
+        };
+
+        onAuthStateChanged(auth, async (user) => {
+            currentUser = user;
+            updateNavUI();
+
+            if (user) {
+                const userRef = doc(db, "users", user.uid);
+                const docSnap = await getDoc(userRef);
+
+                if (!docSnap.exists()) {
+                    await setDoc(userRef, {
+                        uid: user.uid,
+                        email: user.email,
+                        displayName: user.displayName,
+                        photoURL: user.photoURL,
+                        avatarId: "user",
+                        trialsUsed: 0,
+                        isPremium: false,
+                        createdAt: serverTimestamp()
+                    });
+                    userData = { trialsUsed: 0, isPremium: false, avatarId: "user" };
+                } else {
+                    userData = docSnap.data();
+                }
+                loadUserOrders();
+                updateProfileUI();
+            }
+        });
+
+        // --- Core Business Logic ---
+        window.initiateBooking = async () => {
+            if (!currentUser) {
+                toggleModal('login', true);
+                return;
+            }
+            // Refresh data to be sure
+            const userRef = doc(db, "users", currentUser.uid);
+            const docSnap = await getDoc(userRef);
+            userData = docSnap.data();
+
+            if (userData.trialsUsed >= 5 && !userData.isPremium) {
+                toggleModal('payment', true);
+            } else {
+                renderBookingForm();
+                toggleModal('booking', true);
+            }
+        };
+
+        window.submitOrder = async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('btn-submit-order');
+            const originalText = btn.innerText;
+            btn.innerText = "Processing...";
+            btn.disabled = true;
+            
+            try {
+                const formData = {
+                    userId: currentUser.uid,
+                    userEmail: currentUser.email,
+                    userName: document.getElementById('book-name').value,
+                    whatsapp: document.getElementById('book-whatsapp').value,
+                    category: document.getElementById('book-category').value,
+                    type: document.getElementById('book-type').value,
+                    description: document.getElementById('book-desc').value,
+                    status: "Pending",
+                    createdAt: serverTimestamp()
+                };
+
+                const software = document.getElementById('book-software');
+                if (software) formData.software = software.value;
+                const link = document.getElementById('book-link');
+                if (link) formData.driveLink = link.value;
+
+                await addDoc(collection(db, "orders"), formData);
+                await updateDoc(doc(db, "users", currentUser.uid), {
+                    trialsUsed: increment(1)
+                });
+                userData.trialsUsed++;
+                
+                toggleModal('booking', false);
+                showToast("Order Placed Successfully!", "success");
+                navTo('dashboard');
+                
+            } catch (error) {
+                console.error(error);
+                showToast("Failed to book service.", "error");
+            } finally {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
+        };
+
+        window.submitPayment = async () => {
+            const utr = document.getElementById('payment-utr').value;
+            if(!utr) return showToast("Please enter UTR ID", "error");
+
+            try {
+                await addDoc(collection(db, "payment_requests"), {
+                    userId: currentUser.uid,
+                    email: currentUser.email,
+                    utr: utr,
+                    upiId: "9239529167@fam",
+                    status: "Pending",
+                    createdAt: serverTimestamp()
+                });
+                toggleModal('payment', false);
+                showToast("Payment submitted for verification.", "success");
+            } catch (err) {
+                showToast("Error submitting payment", "error");
+            }
+        };
+
+        // --- UI & Helpers ---
+        window.updateUserProfile = async () => {
+            const newName = document.getElementById('profile-name').value;
+            const selectedAvatar = document.querySelector('.avatar-option.ring-2')?.dataset.id || userData.avatarId;
+
+            if (currentUser) {
+                await updateDoc(doc(db, "users", currentUser.uid), {
+                    displayName: newName,
+                    avatarId: selectedAvatar
+                });
+                showToast("Profile updated!", "success");
+            }
+        }
+
+        window.copyUPI = () => {
+            const upi = "9239529167@fam";
+            navigator.clipboard.writeText(upi).then(() => {
+                showToast("UPI ID Copied!", "success");
+            }).catch(err => {
+                const ta = document.createElement("textarea");
+                ta.value = upi;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+                showToast("UPI ID Copied!", "success");
+            });
+        };
+
+        async function loadConfig() {
+            try {
+                const configDoc = await getDoc(doc(db, "app_config", "services_data"));
+                if (configDoc.exists()) servicesConfig = { ...servicesConfig, ...configDoc.data() };
+            } catch (e) {}
+        }
+        loadConfig();
+
+        function loadUserOrders() {
+            const q = query(collection(db, "orders"), where("userId", "==", currentUser.uid));
+            onSnapshot(q, (snapshot) => {
+                const container = document.getElementById('orders-list');
+                container.innerHTML = '';
+                
+                if (snapshot.empty) {
+                    container.innerHTML = `<div class="text-center p-6 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">No orders yet. Start your first trial!</div>`;
+                    return;
+                }
+
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    let statusColor = "bg-yellow-100 text-yellow-600 border-yellow-200";
+                    if(data.status === "Completed") statusColor = "bg-green-100 text-green-600 border-green-200";
+                    if(data.status === "Rejected") statusColor = "bg-red-100 text-red-600 border-red-200";
+
+                    const item = document.createElement('div');
+                    item.className = "bg-white p-5 rounded-2xl shadow-sm border border-slate-100 mb-3 hover:shadow-md transition";
+                    item.innerHTML = `
+                        <div class="flex justify-between items-start mb-2">
+                            <div>
+                                <span class="text-[10px] font-bold uppercase tracking-wider text-blue-500 mb-1 block">${data.category}</span>
+                                <h3 class="font-bold text-slate-800 text-lg leading-tight">${data.type}</h3>
+                            </div>
+                            <span class="px-3 py-1 rounded-full text-[10px] font-bold uppercase border ${statusColor}">${data.status}</span>
+                        </div>
+                        <p class="text-sm text-slate-500 line-clamp-2">${data.description}</p>
+                    `;
+                    container.appendChild(item);
+                });
+            });
+        }
+
+        function renderBookingForm() {
+            const category = document.getElementById('book-category').value;
+            const dynamicArea = document.getElementById('dynamic-fields');
+            dynamicArea.innerHTML = ''; 
+
+            let types = [];
+            if(category === 'Editing') types = servicesConfig.editingTypes;
+            if(category === 'Designing') types = servicesConfig.designTypes;
+            if(category === 'Web Development') types = servicesConfig.devTypes;
+
+            // Type Select
+            let html = `
+                <div class="space-y-2">
+                    <label class="text-xs font-bold text-slate-500 uppercase ml-1">Service Type</label>
+                    <div class="relative">
+                        <select id="book-type" class="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-blue-500 transition font-medium appearance-none">
+                            ${types.map(t => `<option value="${t}">${t}</option>`).join('')}
+                        </select>
+                        <i class="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                    </div>
+                </div>
+            `;
+            
+            // Software Select (Not for Dev)
+            if (category !== 'Web Development') {
+                html += `
+                    <div class="space-y-2 mt-4">
+                        <label class="text-xs font-bold text-slate-500 uppercase ml-1">Preferred Software</label>
+                        <div class="relative">
+                            <select id="book-software" class="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-blue-500 transition font-medium appearance-none">
+                                ${servicesConfig.software.map(s => `<option value="${s}">${s}</option>`).join('')}
+                            </select>
+                            <i class="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Link Input (Only Editing)
+            if (category === 'Editing') {
+                html += `
+                     <div class="space-y-2 mt-4">
+                        <label class="text-xs font-bold text-slate-500 uppercase ml-1">Drive Link (Footage)</label>
+                        <input type="url" id="book-link" placeholder="https://drive.google.com/..." class="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-blue-500 transition font-medium" required>
+                    </div>
+                `;
+            }
+            dynamicArea.innerHTML = html;
+        }
+
+        function updateNavUI() {
+            const navAuth = document.getElementById('nav-auth');
+            if (currentUser) {
+                navAuth.innerHTML = `
+                    <button onclick="navTo('dashboard')" class="btn-3d-secondary px-5 py-2 rounded-xl flex items-center gap-2 text-white font-bold text-sm">
+                        <i class="ph-bold ph-user"></i> <span>Profile</span>
+                    </button>
+                `;
+            } else {
+                navAuth.innerHTML = `
+                    <button onclick="toggleModal('login', true)" class="btn-3d-primary px-6 py-2 rounded-xl text-white font-bold text-sm">
+                        Login
+                    </button>
+                `;
+            }
+        }
+
+        function updateProfileUI() {
+            if(!userData) return;
+            document.getElementById('profile-name').value = userData.displayName || "";
+            const trialsLeft = 5 - userData.trialsUsed;
+            const badge = document.getElementById('trials-badge');
+            badge.innerText = `${trialsLeft} Left`;
+            badge.className = trialsLeft > 0 
+                ? "px-3 py-1 bg-green-100 text-green-600 rounded-full text-xs font-bold uppercase"
+                : "px-3 py-1 bg-red-100 text-red-600 rounded-full text-xs font-bold uppercase";
+
+            const avatars = ['user', 'robot', 'alien', 'smiley', 'ghost', 'cat'];
+            const container = document.getElementById('avatar-grid');
+            container.innerHTML = avatars.map(av => `
+                <div class="avatar-option w-10 h-10 rounded-lg bg-white shadow-sm border ${userData.avatarId === av ? 'ring-2 ring-blue-500 border-blue-500 text-blue-500' : 'border-slate-200 text-slate-400 hover:text-slate-600'} flex items-center justify-center cursor-pointer transition" 
+                     data-id="${av}" onclick="selectAvatar(this)">
+                    <i class="ph-fill ph-${av} text-xl"></i>
+                </div>
+            `).join('');
+            
+            document.getElementById('dashboard-name').innerText = userData.displayName || "Valued Client";
+            document.getElementById('dashboard-email').innerText = currentUser.email;
+            document.getElementById('dashboard-avatar-icon').className = `ph-fill ph-${userData.avatarId || 'user'}`;
+        }
+
+        // --- Navigation & Modals ---
+        window.navTo = (viewName) => {
+            const views = ['home', 'services', 'dashboard', 'contact'];
+            views.forEach(v => document.getElementById(`view-${v}`).classList.add('hidden'));
+            document.getElementById(`view-${viewName}`).classList.remove('hidden');
+            window.scrollTo(0,0);
+        };
+
+        window.toggleModal = (name, show) => {
+            const modal = document.getElementById(`modal-${name}`);
+            if (show) {
+                modal.classList.remove('hidden');
+                setTimeout(() => modal.firstElementChild.classList.remove('scale-90', 'opacity-0', 'translate-y-4'), 10);
+            } else {
+                modal.firstElementChild.classList.add('scale-90', 'opacity-0', 'translate-y-4');
+                setTimeout(() => modal.classList.add('hidden'), 300);
+            }
+        };
+
+        window.selectAvatar = (el) => {
+            document.querySelectorAll('.avatar-option').forEach(d => {
+                d.classList.remove('ring-2', 'ring-blue-500', 'border-blue-500', 'text-blue-500');
+                d.classList.add('border-slate-200', 'text-slate-400');
+            });
+            el.classList.remove('border-slate-200', 'text-slate-400');
+            el.classList.add('ring-2', 'ring-blue-500', 'border-blue-500', 'text-blue-500');
+        }
+
+        window.showToast = (msg, type = 'success') => {
+            const toast = document.createElement('div');
+            const colorClass = type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white';
+            toast.className = `fixed top-24 left-1/2 transform -translate-x-1/2 ${colorClass} px-6 py-3 rounded-xl shadow-xl flex items-center gap-3 z-[100] text-sm font-bold animate-bounce-in min-w-[280px] justify-center`;
+            toast.innerHTML = `<i class="ph-bold ph-${type === 'success' ? 'check-circle' : 'warning-circle'} text-lg"></i> ${msg}`;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        };
+
+        document.getElementById('book-category').addEventListener('change', renderBookingForm);
+    </script>
+
+    <style>
+        body { background-color: #f0f4f8; }
+        
+        /* 3D Button Styles */
+        .btn-3d-primary {
+            background: linear-gradient(to bottom, #3b82f6, #2563eb);
+            box-shadow: 0 4px 0 #1d4ed8, 0 10px 15px rgba(0,0,0,0.1);
+            transition: all 0.1s;
+        }
+        .btn-3d-primary:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 0 #1d4ed8;
+        }
+
+        .btn-3d-secondary {
+            background: linear-gradient(to bottom, #8b5cf6, #7c3aed);
+            box-shadow: 0 4px 0 #6d28d9, 0 10px 15px rgba(0,0,0,0.1);
+            transition: all 0.1s;
+        }
+        .btn-3d-secondary:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 0 #6d28d9;
+        }
+
+        .btn-3d-white {
+            background: #ffffff;
+            color: #334155;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 4px 0 #cbd5e1, 0 5px 10px rgba(0,0,0,0.05);
+            transition: all 0.1s;
+        }
+        .btn-3d-white:active {
+            transform: translateY(4px);
+            box-shadow: 0 0 0 #cbd5e1;
+        }
+    /* Soft Glassmorphism */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            box-shadow: 0 20px 40px -5px rgba(0,0,0,0.05);
+        }
+
+        /* Animations */
+        @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-15px); }
+        }
+        .animate-float { animation: float 5s ease-in-out infinite; }
+
+        .blob {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.6;
+            z-index: -1;
+        }
+    </style>
+</head>
+<body class="font-sans text-slate-700 overflow-x-hidden selection:bg-blue-200 selection:text-blue-900">
+
+    <!-- Navbar -->
+    <nav class="fixed top-0 w-full z-40 bg-white/80 backdrop-blur-md border-b border-white/50 shadow-sm">
+        <div class="max-w-6xl mx-auto px-6 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-3 cursor-pointer" onclick="navTo('home')">
+                <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-lg">V</div>
+                <span class="text-xl font-bold tracking-tight text-slate-800">Versa</span>
+            </div>
+            
+            <div class="hidden md:flex items-center gap-8 text-sm font-bold text-slate-500">
+                <a onclick="navTo('home')" class="hover:text-blue-600 cursor-pointer transition">Home</a>
+                <a onclick="navTo('services')" class="hover:text-blue-600 cursor-pointer transition">Services</a>
+                <a onclick="navTo('contact')" class="hover:text-blue-600 cursor-pointer transition">Contact</a>
+            </div>
+
+            <div class="flex items-center gap-4">
+                <div id="nav-auth"></div>
+                <button class="md:hidden text-2xl text-slate-600" onclick="document.getElementById('mobile-menu').classList.toggle('hidden')">
+                    <i class="ph-bold ph-list"></i>
+                </button>
+            </div>
+        </div>
+        
+        <div id="mobile-menu" class="hidden md:hidden bg-white border-t border-slate-100 p-6 space-y-4 absolute w-full shadow-xl">
+            <a onclick="navTo('home'); document.getElementById('mobile-menu').classList.add('hidden')" class="block font-bold text-slate-600">Home</a>
+            <a onclick="navTo('services'); document.getElementById('mobile-menu').classList.add('hidden')" class="block font-bold text-slate-600">Services</a>
+            <a onclick="navTo('contact'); document.getElementById('mobile-menu').classList.add('hidden')" class="block font-bold text-slate-600">Contact</a>
+        </div>
+    </nav>
+
+    <div class="pt-24 min-h-screen relative">
+        <!-- Background Blobs -->
+        <div class="blob bg-blue-300 w-96 h-96 top-0 left-0"></div>
+        <div class="blob bg-purple-200 w-96 h-96 bottom-0 right-0"></div>
+
+        <!-- VIEW: HOME -->
+        <div id="view-home">
+            <section class="max-w-6xl mx-auto px-6 py-12 grid md:grid-cols-2 gap-12 items-center">
+                <div class="z-10">
+                    <div class="inline-block px-4 py-1 bg-blue-50 border border-blue-100 text-blue-600 rounded-full text-xs font-extrabold uppercase tracking-wide mb-6">
+                        Premium Digital Agency
+                    </div>
+                    <h1 class="text-5xl md:text-7xl font-extrabold leading-tight mb-6 text-slate-900">
+                        Create.<br>
+                        <span class="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-violet-600">Innovate.</span><br>
+                        Inspire.
+                    </h1>
+                    <p class="text-slate-500 text-lg mb-8 max-w-md font-medium">
+                        Versa brings professional quality to your fingertips. Start your journey with <span class="text-blue-600 font-bold">5 Free Trials</span>.
+                    </p>
+                    <div class="flex gap-4">
+                        <button onclick="navTo('services')" class="btn-3d-primary px-8 py-3 rounded-xl text-white font-bold">
+                            Explore Services
+                        </button>
+                        <button onclick="navTo('contact')" class="btn-3d-white px-8 py-3 rounded-xl font-bold">
+                            Contact Us
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 3D Floating Illustration -->
+                <div class="relative h-[400px] hidden md:block">
+                    <div class="absolute top-10 right-10 bg-white p-6 rounded-3xl shadow-card animate-float z-20">
+                        <div class="w-16 h-16 bg-blue-100 rounded-2xl flex items-center justify-center text-blue-600 text-3xl mb-2">
+                            <i class="ph-fill ph-film-strip"></i>
+                        </div>
+                        <p class="font-bold text-slate-800">Editing</p>
+                    </div>
+                    <div class="absolute bottom-20 left-10 bg-white p-6 rounded-3xl shadow-card animate-float z-10" style="animation-delay: 1s;">
+                        <div class="w-16 h-16 bg-violet-100 rounded-2xl flex items-center justify-center text-violet-600 text-3xl mb-2">
+                            <i class="ph-fill ph-code"></i>
+                        </div>
+                        <p class="font-bold text-slate-800">Dev</p>
+                    </div>
+                    <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white/50 backdrop-blur-xl p-8 rounded-full shadow-2xl z-0 w-64 h-64 border-4 border-white"></div>
+                </div>
+            </section>
+
+            <!-- REVIEWS SECTION (RESTORED) -->
+            <section class="py-20 bg-white/50">
+                <div class="max-w-6xl mx-auto px-6">
+                    <h2 class="text-3xl font-extrabold text-center mb-12 text-slate-900">Trusted by Creators</h2>
+                    <div class="grid md:grid-cols-3 gap-8">
+                        <!-- Review 1 -->
+                        <div class="bg-white p-8 rounded-3xl shadow-card hover:-translate-y-2 transition duration-300">
+                            <div class="flex text-yellow-400 mb-4 gap-1"><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i></div>
+                            <p class="text-slate-600 italic mb-6">"The video editing quality is insane! They turned my raw vlog footage into a cinematic masterpiece. Highly recommended!"</p>
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold text-xl">R</div>
+                                <div>
+                                    <p class="font-bold text-slate-900">Rahul S.</p>
+                                    <p class="text-xs text-slate-500 uppercase font-bold">YouTuber</p>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Review 2 -->
+                        <div class="bg-white p-8 rounded-3xl shadow-card hover:-translate-y-2 transition duration-300">
+                            <div class="flex text-yellow-400 mb-4 gap-1"><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i></div>
+                            <p class="text-slate-600 italic mb-6">"Got my e-commerce website developed in record time. The UI is sleek and the backend is robust. Versa knows their stuff."</p>
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 bg-violet-100 rounded-full flex items-center justify-center text-violet-600 font-bold text-xl">P</div>
+                                <div>
+                                    <p class="font-bold text-slate-900">Priya M.</p>
+                                    <p class="text-xs text-slate-500 uppercase font-bold">Entrepreneur</p>
+                                </div>
+                            </div>
+                        </div>
+                         <!-- Review 3 -->
+                         <div class="bg-white p-8 rounded-3xl shadow-card hover:-translate-y-2 transition duration-300">
+                            <div class="flex text-yellow-400 mb-4 gap-1"><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i><i class="ph-fill ph-star"></i><i class="ph-fill ph-star-half"></i></div>
+                            <p class="text-slate-600 italic mb-6">"Amazing poster designs for my event. The 3D elements they added were perfect. Will book again."</p>
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 bg-pink-100 rounded-full flex items-center justify-center text-pink-600 font-bold text-xl">A</div>
+                                <div>
+                                    <p class="font-bold text-slate-900">Amit K.</p>
+                                    <p class="text-xs text-slate-500 uppercase font-bold">Event Manager</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- VIEW: SERVICES -->
+        <div id="view-services" class="hidden py-10 px-6">
+            <div class="max-w-6xl mx-auto">
+                <div class="text-center mb-16">
+                    <h2 class="text-4xl font-extrabold text-slate-900 mb-4">Our Premium Services</h2>
+                    <p class="text-slate-500 font-medium">Select a category to begin your creation process.</p>
+                </div>
+
+                <div class="grid md:grid-cols-3 gap-8">
+                    <!-- Card 1 -->
+                    <div class="bg-white rounded-[32px] p-8 shadow-card hover:-translate-y-3 transition duration-500 border border-slate-100 relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-bl-[100px] z-0 transition group-hover:bg-blue-100"></div>
+                        <div class="relative z-10">
+                            <div class="w-20 h-20 bg-blue-500 rounded-2xl flex items-center justify-center text-white text-4xl mb-6 shadow-lg shadow-blue-200">
+                                <i class="ph-fill ph-film-strip"></i>
+                            </div>
+                            <h3 class="text-2xl font-bold text-slate-800 mb-3">Video Editing</h3>
+                            <p class="text-slate-500 mb-8 leading-relaxed">Cinematic cuts, motion graphics, and sound design that brings your footage to life.</p>
+                            <button onclick="initiateBooking()" class="w-full btn-3d-white py-3 rounded-xl font-bold text-slate-600">Book Editing</button>
+                        </div>
+                    </div>
+                    
+                    <!-- Card 2 -->
+                    <div class="bg-white rounded-[32px] p-8 shadow-card hover:-translate-y-3 transition duration-500 border border-slate-100 relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-violet-50 rounded-bl-[100px] z-0 transition group-hover:bg-violet-100"></div>
+                        <div class="relative z-10">
+                            <div class="w-20 h-20 bg-violet-500 rounded-2xl flex items-center justify-center text-white text-4xl mb-6 shadow-lg shadow-violet-200">
+                                <i class="ph-fill ph-code"></i>
+                            </div>
+                            <h3 class="text-2xl font-bold text-slate-800 mb-3">Web Development</h3>
+                            <p class="text-slate-500 mb-8 leading-relaxed">Full-stack solutions, responsive designs, and robust applications for your business.</p>
+                            <button onclick="initiateBooking()" class="w-full btn-3d-white py-3 rounded-xl font-bold text-slate-600">Book Dev</button>
+                        </div>
+                    </div>
+
+                    <!-- Card 3 -->
+                    <div class="bg-white rounded-[32px] p-8 shadow-card hover:-translate-y-3 transition duration-500 border border-slate-100 relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 w-32 h-32 bg-pink-50 rounded-bl-[100px] z-0 transition group-hover:bg-pink-100"></div>
+                        <div class="relative z-10">
+                            <div class="w-20 h-20 bg-pink-500 rounded-2xl flex items-center justify-center text-white text-4xl mb-6 shadow-lg shadow-pink-200">
+                                <i class="ph-fill ph-paint-brush-broad"></i>
+                            </div>
+                            <h3 class="text-2xl font-bold text-slate-800 mb-3">Designing</h3>
+                            <p class="text-slate-500 mb-8 leading-relaxed">Logos, posters, and UI/UX design. We create visuals that leave a lasting impression.</p>
+                            <button onclick="initiateBooking()" class="w-full btn-3d-white py-3 rounded-xl font-bold text-slate-600">Book Design</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: DASHBOARD -->
+        <div id="view-dashboard" class="hidden py-10 px-6">
+            <div class="max-w-4xl mx-auto space-y-8">
+                <!-- User Profile Card -->
+                <div class="glass-card rounded-[32px] p-8 flex flex-col md:flex-row items-center gap-8">
+                    <div class="w-28 h-28 bg-white rounded-full shadow-lg flex items-center justify-center text-blue-500 text-5xl border-4 border-blue-50">
+                        <i class="ph-fill ph-user" id="dashboard-avatar-icon"></i>
+                    </div>
+                    <div class="text-center md:text-left flex-1">
+                        <h2 class="text-3xl font-bold text-slate-800 mb-1" id="dashboard-name">Loading...</h2>
+                        <p class="text-slate-500 font-medium mb-4" id="dashboard-email">Loading...</p>
+                        <div class="flex flex-wrap justify-center md:justify-start gap-4">
+                            <span class="px-4 py-1 bg-white border border-slate-200 rounded-full text-slate-600 text-xs font-bold uppercase shadow-sm">Free Plan</span>
+                            <span id="trials-badge" class="px-4 py-1 bg-slate-100 text-slate-600 rounded-full text-xs font-bold uppercase">Loading...</span>
+                        </div>
+                    </div>
+                    <button onclick="logout()" class="text-red-500 hover:bg-red-50 px-4 py-2 rounded-xl font-bold text-sm transition">Sign Out</button>
+                </div>
+
+                <div class="grid md:grid-cols-12 gap-8">
+                    <!-- Edit Profile -->
+                    <div class="md:col-span-4 bg-white rounded-[32px] p-8 shadow-card h-fit">
+                        <h3 class="font-bold text-slate-800 text-lg mb-6">Edit Profile</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="text-xs font-bold text-slate-400 uppercase ml-1">Display Name</label>
+                                <input type="text" id="profile-name" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label class="text-xs font-bold text-slate-400 uppercase ml-1">Avatar</label>
+                                <div class="flex flex-wrap gap-2" id="avatar-grid"></div>
+                            </div>
+                            <button onclick="updateUserProfile()" class="w-full btn-3d-primary py-3 rounded-xl text-white text-sm font-bold mt-2">Save Changes</button>
+                        </div>
+                    </div>
+                              <!-- Orders -->
+                    <div class="md:col-span-8 bg-white rounded-[32px] p-8 shadow-card min-h-[400px]">
+                        <h3 class="font-bold text-slate-800 text-lg mb-6 flex justify-between">
+                            <span>My Orders</span>
+                            <i class="ph-bold ph-clock-counter-clockwise text-slate-400"></i>
+                        </h3>
+                        <div id="orders-list" class="space-y-4"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIEW: CONTACT -->
+        <div id="view-contact" class="hidden py-10 px-6 flex items-center justify-center">
+            <div class="max-w-lg w-full bg-white rounded-[40px] p-10 shadow-card relative overflow-hidden border border-slate-100">
+                <div class="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-violet-500 to-pink-500"></div>
+                
+                <div class="text-center mb-10">
+                    <h2 class="text-3xl font-extrabold text-slate-800 mb-2">Get in Touch</h2>
+                    <p class="text-slate-500 font-medium">We are always ready to help you.</p>
+                </div>
+                
+                <div class="space-y-4">
+                    <!-- WhatsApp -->
+                    <a href="https://wa.me/919239529167" target="_blank" class="flex items-center gap-4 p-4 rounded-2xl bg-green-50 border border-green-100 hover:bg-green-100 transition group cursor-pointer">
+                        <div class="w-12 h-12 rounded-full bg-green-500 text-white flex items-center justify-center text-2xl shadow-md"><i class="ph-fill ph-whatsapp-logo"></i></div>
+                        <div>
+                            <h3 class="font-bold text-slate-800">WhatsApp</h3>
+                            <p class="text-slate-500 text-sm font-mono">+91 9239529167</p>
+                        </div>
+                    </a>
+
+                    <!-- Email -->
+                    <a href="mailto:Getsahay.india@gmail.com" class="flex items-center gap-4 p-4 rounded-2xl bg-red-50 border border-red-100 hover:bg-red-100 transition group cursor-pointer">
+                        <div class="w-12 h-12 rounded-full bg-red-500 text-white flex items-center justify-center text-2xl shadow-md"><i class="ph-fill ph-envelope"></i></div>
+                        <div>
+                            <h3 class="font-bold text-slate-800">Email</h3>
+                            <p class="text-slate-500 text-sm">Getsahay.india@gmail.com</p>
+                        </div>
+                    </a>
+
+                    <!-- Address -->
+                    <div class="flex items-center gap-4 p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                         <div class="w-12 h-12 rounded-full bg-slate-700 text-white flex items-center justify-center text-2xl shadow-md"><i class="ph-fill ph-map-pin"></i></div>
+                         <div>
+                            <h3 class="font-bold text-slate-800">Headquarters</h3>
+                            <p class="text-slate-500 text-sm">Nawabpur Ashiana Complex,<br>Hooghly, 712701 (WB)</p>
+                        </div>
+                    </div>
+
+                    <!-- Social Links -->
+                    <div class="grid grid-cols-3 gap-3 pt-4">
+                        <a href="https://www.instagram.com/mallik.edittion" target="_blank" class="flex flex-col items-center justify-center p-3 rounded-2xl bg-pink-50 text-pink-600 hover:bg-pink-100 transition font-bold text-xs uppercase">
+                            <i class="ph-fill ph-instagram-logo text-2xl mb-1"></i> Instagram
+                        </a>
+                        <a href="https://youtube.com/@ayatserenity-t4i" target="_blank" class="flex flex-col items-center justify-center p-3 rounded-2xl bg-red-50 text-red-600 hover:bg-red-100 transition font-bold text-xs uppercase">
+                            <i class="ph-fill ph-youtube-logo text-2xl mb-1"></i> YouTube
+                        </a>
+                        <a href="https://mallikabdurrahman37-hash.github.io/Versa-/index.html" target="_blank" class="flex flex-col items-center justify-center p-3 rounded-2xl bg-blue-50 text-blue-600 hover:bg-blue-100 transition font-bold text-xs uppercase">
+                            <i class="ph-fill ph-globe text-2xl mb-1"></i> Portfolio
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: LOGIN -->
+    <div id="modal-login" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm hidden transition-opacity duration-300">
+        <div class="bg-white rounded-[32px] p-8 max-w-sm w-full mx-6 shadow-2xl transform transition-all duration-300 scale-90 opacity-0 translate-y-4">
+            <div class="text-center">
+                <div class="w-16 h-16 bg-blue-600 text-white rounded-2xl flex items-center justify-center mx-auto mb-6 text-3xl font-bold shadow-lg shadow-blue-200">V</div>
+                <h2 class="text-2xl font-bold mb-2 text-slate-800">Welcome Back</h2>
+                <p class="text-slate-500 text-sm mb-8">Sign in to manage your bookings.</p>
+                
+                <button onclick="googleLogin()" class="w-full flex items-center justify-center gap-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 py-3.5 rounded-xl transition mb-4 font-bold shadow-sm">
+                    <i class="ph-fill ph-google-logo text-xl text-red-500"></i>
+                    Continue with Google
+                </button>
+                
+                <button onclick="toggleModal('login', false)" class="text-slate-400 text-sm hover:text-slate-600 transition font-bold">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: BOOKING -->
+    <div id="modal-booking" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm hidden transition-opacity duration-300">
+        <div class="bg-white rounded-[32px] p-8 max-w-lg w-full mx-4 shadow-2xl transform transition-all duration-300 scale-90 opacity-0 translate-y-4 max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center mb-8">
+                <h2 class="text-2xl font-bold text-slate-800">New Booking</h2>
+                <button onclick="toggleModal('booking', false)" class="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:text-slate-800 transition"><i class="ph-bold ph-x"></i></button>
+            </div>
+
+            <form onsubmit="submitOrder(event)" class="space-y-5">
+                <div class="grid grid-cols-2 gap-5">
+                    <div>
+                        <label class="text-xs font-bold text-slate-400 uppercase ml-1">Your Name</label>
+                        <input type="text" id="book-name" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:border-blue-500" required>
+                    </div>
+                    <div>
+                        <label class="text-xs font-bold text-slate-400 uppercase ml-1">WhatsApp</label>
+                        <input type="tel" id="book-whatsapp" placeholder="+91..." class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:border-blue-500" required>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="text-xs font-bold text-slate-400 uppercase ml-1">Category</label>
+                    <div class="relative">
+                        <select id="book-category" class="w-full bg-slate-50 border border-slate-200 text-slate-700 rounded-xl p-3 text-sm focus:outline-none focus:border-blue-500 transition font-medium appearance-none">
+                            <option value="Editing">Video Editing</option>
+                            <option value="Web Development">Web Development</option>
+                            <option value="Designing">Designing</option>
+                        </select>
+                        <i class="ph-bold ph-caret-down absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"></i>
+                    </div>
+                </div>
+
+                <div id="dynamic-fields"></div>
+
+                <div>
+                    <label class="text-xs font-bold text-slate-400 uppercase ml-1">Project Details</label>
+                    <textarea id="book-desc" rows="3" class="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none focus:border-blue-500" placeholder="Describe your vision..." required></textarea>
+                </div>
+
+                <button type="submit" id="btn-submit-order" class="w-full btn-3d-primary py-4 rounded-xl font-bold text-white uppercase tracking-wider mt-2">
+                    Confirm Order
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: PAYMENT -->
+    <div id="modal-payment" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-md hidden transition-opacity duration-300">
+        <div class="bg-white rounded-[32px] p-8 max-w-sm w-full mx-4 shadow-2xl transform transition-all duration-300 scale-90 opacity-0 translate-y-4 text-center border-t-8 border-yellow-400">
+            
+            <div class="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-6 text-3xl text-yellow-600 shadow-md">
+                <i class="ph-fill ph-crown"></i>
+            </div>
+            
+            <h2 class="text-xl font-bold mb-2 text-slate-800">Premium Upgrade</h2>
+            <p class="text-slate-500 text-sm mb-6 px-4">You've reached the 5-trial limit. Complete payment to unlock unlimited booking.</p>
+
+            <!-- QR Code -->
+            <div class="bg-slate-50 p-4 rounded-2xl mb-5 shadow-inner border border-slate-100">
+                <img src="qr.png" alt="Payment QR" class="w-48 h-48 object-contain mx-auto rounded-xl bg-white" onerror="this.src='https://placehold.co/200x200/png?text=QR+Code'">
+                <p class="text-xs text-slate-400 mt-2 font-bold">Scan to Pay</p>
+            </div>
+            
+            <!-- UPI Copy -->
+            <div class="bg-blue-50 border border-blue-100 rounded-xl p-3 flex items-center justify-between mb-5">
+                <div class="text-left pl-2">
+                    <p class="text-[10px] text-blue-400 uppercase font-bold tracking-wider">UPI ID</p>
+                    <p class="text-sm font-mono text-blue-700 font-bold">9239529167@fam</p>
+                </div>
+                <button onclick="copyUPI()" class="w-10 h-10 rounded-lg bg-white shadow-sm flex items-center justify-center text-blue-500 hover:text-blue-700 transition">
+                    <i class="ph-bold ph-copy"></i>
+                </button>
+            </div>
+            
+            <div class="mb-5 text-left">
+                <input type="text" id="payment-utr" placeholder="Enter Transaction UTR" class="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl p-4 text-sm text-center focus:border-yellow-400 outline-none font-mono font-bold tracking-widest">
+            </div>
+
+            <button onclick="submitPayment()" class="w-full bg-gradient-to-r from-yellow-400 to-orange-500 text-white py-4 rounded-xl font-bold uppercase tracking-wider shadow-lg shadow-orange-200 hover:shadow-xl transition">
+                Verify Payment
+            </button>
+            <button onclick="toggleModal('payment', false)" class="mt-4 text-xs text-slate-400 font-bold uppercase tracking-widest hover:text-slate-600">Close</button>
+        </div>
+    </div>
+
+</body>
+</html>
